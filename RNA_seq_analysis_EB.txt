@@ -1,0 +1,83 @@
+#Name: Edmond Brewer
+#Date: 4/20
+#Class: Applied Bioinformatics BMMB 852
+#Assignment: Perform an RNA-seq analysis
+
+For this assignment, I used RNA-seq data from Drosophila melanogaster, from an experiment (PRJNA604807) done in February of this year by Carl Thummel of the University of Utah.
+The group looked at the Drosophila Estrogen-Related Receptor (dERR) and how knocking it out changes the metabolic response of 6 day old pupae.
+
+By using the code below, I aligned the sample sequences to the Drosophila genome, used featurecounts to find the transcript counts that overlap annotations, and used DESeq to find the
+differentially expressed transcripts. When I passed them through a filter of a p-value less than 0.05, and then sorted for highest foldchange, I found the following transcripts to have the highest
+differential expression between control and knockout. There were 879 DEGs in all.
+
+exon-NR_123930.1-1	27.7818736869891
+exon-NM_001043089.3-1	16.0129186111418
+exon-NM_170263.4-1	15.9646944331902
+exon-NM_130725.3-1	11.6948365106152
+exon-NR_124559.1-4	11.3554174922804
+exon-NR_133288.1-1	8.97618102175957
+exon-NM_001260053.1-1	8.88252405923184
+exon-NM_132187.3-1	8.33487276991195
+exon-NM_141629.3-2	8.06567747978057
+exon-NM_001260053.1-2	8.03916588639734
+
+I then tried to perform a GSEA on the DEGs that I found, but I had a very hard time with converting these RefSeq IDs into genes or finding anything else about these IDs. I got the GFF file from the NCBI,
+so if I had more time I would have tried a different annotation file but the assignment was late anyway. The authors found that "glycolytic and pentose phosphate pathway genes are induced by dERR",
+so at least there is some knowledge about the gene- and protein-level changes when dERR is knocked out. They also report that the flies have decreased locomotion, are susceptible to starvartion, and
+and seem to be putting all of their glucose in the bloodstream vs storing it via triglycerides. 
+
+
+Code:
+
+set -uex
+
+#Download and unpack the data.
+mkdir reads
+cd reads
+esearch -db sra -query PRJNA604807 | efetch -format runinfo > runinfo.csv
+#Get run IDs and base number.
+cat runinfo.csv | cut -f 1 -d , | grep SRR > runids.txt
+split -l 3 runids.txt ID
+#Do a parallel FASTQ dump and split the files.
+cat IDaa | head -5 | parallel fastq-dump --split-files {}
+cat IDab | head -5 | parallel fastq-dump --split-files {} 
+cd ..
+
+#Get reference genome and index for hisat2
+mkdir refs
+cd refs
+wget "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/invertebrate/Drosophila_melanogaster/latest_assembly_versions/GCF_000001215.4_Release_6_plus_ISO1_MT/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna.gz"
+wget "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/215/GCF_000001215.4_Release_6_plus_ISO1_MT/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.gff.gz"
+gunzip *.gz
+mv GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fa
+hisat2-build GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fa GCF_000001215.4_Release_6_plus_ISO1_MT_genomic
+REF=refs/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fa
+GFF=refs/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.gff
+IDX=GCF_000001215.4_Release_6_plus_ISO1_MT_genomic
+cd ..
+
+
+
+#Make BAM folder, create names file, align/sort/convert to BAM, then index the BAM file. Do this using parallel for all of the files.
+mkdir -p bam
+parallel -j 1 echo {1} ::: SRR11017723 SRR11017724 SRR11017725 SRR11017726 SRR11017727 SRR11017728  > names.txt
+cat names.txt | parallel "hisat2 refs/$IDX -U reads/{}_1.fastq | samtools sort > bam/{}.bam" 2>> log.txt
+hisat2 refs/$IDX -U reads/SRR11017723_1.fastq | samtools sort > bam/SRR11017723.bam 2>> log.txt
+
+#Run featurecounts, then simplify the counts
+featureCounts -p -a $GFF -g ID -o counts.txt  bam/*.bam 2>> logf.txt
+cat counts.txt | cut -f 1,7-12 > simple_counts.txt
+
+#DEseq
+wget -q -nc  http://data.biostarhandbook.com/rnaseq/code/deseq1.r
+cat counts.txt | cut -f 1,7-12 > simple_counts.txt
+#Perform the differential expression study.
+cat simple_counts.txt | Rscript deseq1.r 3x3 > results.txt 2>> log.txt
+#Filter out p-values less than 0.05
+cat results.txt | awk ' $8 < 0.05 { print $0 }' > diffgenes.txt
+# How many differentially expressed genes do we have?
+cat diffgenes.txt | wc -l
+#Sort by foldchange to find 10 genes/transcripts with highest variation
+cat diffgenes.txt | sort -rn -k 5 | cut -f 1,5 | head -10
+#Take gene names for GO usage
+cat results.txt | awk ' $2 > 0 { print $0 }' | sort -rn -k 5 | cut -f 1 > results_GO.txt

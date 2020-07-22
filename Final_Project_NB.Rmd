@@ -1,0 +1,209 @@
+---
+title: "Final Project"
+author: "Ned Brewer"
+date: "12/10/2019"
+output: html_document
+---
+Setup for DEG analysis:
+```{r}
+library(qvalue)
+library(oligo)
+library(hexbin)
+library(limma)
+library(dplyr)
+library(tidyverse)
+celfiles <- list.files("~/Desktop/R_WD/GSE70213_RAW/", full = TRUE)
+rawData <- read.celfiles(celfiles)
+Full_IDs <- read_csv(file = 'Affy_1.0_ST_mgi.csv')
+IDs <- Full_IDs[,c(1,4)]
+names(IDs)[1] <- "PROBEID"
+names(IDs)[2] <- "Gene_Symbol"
+IDs <- IDs[complete.cases(IDs), ]
+sampleNames(rawData)
+```
+```{r}
+sampleNames(rawData) = paste(rep(c("Quad","Soleus"),each=12),rep(c("_C","_KO","_C","_KO"),each=6),rep(c(1:6,1:6,1:6,1:6),each=1),sep="")
+sampleNames(rawData)
+```
+```{r}
+blocks = paste(rep(c("C","KO","C","KO"),each=6),rep(c(1:6,1:6,1:6,1:6),each=1),sep="") 
+blocks
+trts = paste(rep(c("Quad","Soleus"),each=12), rep(c("_C","_KO","_C","_KO"),each=6),sep="")
+trts
+musc.rma = rma(rawData)
+dim(musc.rma)
+```
+Limma fitting
+```{r}
+design.trt = model.matrix(~0+trts) 
+library(statmod)
+corfit = duplicateCorrelation(musc.rma, design.trt, block = blocks)
+hist(tanh(corfit$atanh.correlations))
+corfit$consensus.correlation
+fitTrtMean = lmFit(musc.rma, design.trt, block = blocks, cor = corfit$consensus.correlation)
+colnames(design.trt)
+```
+Contrast Setup
+```{r}
+ contrast.matrix=makeContrasts(
+   KOvsC= ((trtsQuad_KO+trtsSoleus_KO)/2 - (trtsQuad_C+trtsSoleus_C)/2),
+   QuadKOvsC= (trtsQuad_KO-trtsQuad_C),
+   SolKOvsC = (trtsSoleus_KO - trtsSoleus_C),
+   QuadCvsSolC= ((trtsQuad_C) -(trtsSoleus_C)),
+   Interact= ((trtsQuad_KO-trtsSoleus_KO)-(trtsQuad_C-trtsSoleus_C)),
+   levels=design.trt)
+contrast.matrix
+fit.contrast=contrasts.fit(fitTrtMean,contrast.matrix)
+efit.contrast=eBayes(fit.contrast)
+
+hist(efit.contrast$p.value[,1],main="KOvsC") 
+hist(efit.contrast$p.value[,2],main="QuadKOvsC") 
+hist(efit.contrast$p.value[,3],main="SolKOvsC")
+hist(efit.contrast$p.value[,4],main="QuadCVsSolC")
+hist(efit.contrast$p.value[,5],main="Interact")
+```
+Contrast q-value Significance and Comparison
+```{r}
+#KOvsC
+qvals1=qvalue(efit.contrast$p.value[,1]) 
+qvals1$pi0
+KOvsC <- sum(qvals1$qvalues<0.05)
+#QuadKOvsC
+qvals2=qvalue(efit.contrast$p.value[,2]) 
+qvals2$pi0
+QuadKOvsC <- sum(qvals2$qvalues<0.05)
+#SolKOvsC
+qvals3=qvalue(efit.contrast$p.value[,3]) 
+qvals3$pi0
+SolKOvsC <- sum(qvals3$qvalues<0.05)
+#QuadCvsSolC
+qvals4=qvalue(efit.contrast$p.value[,4]) 
+qvals4$pi0
+QuadCvsSolC <- sum(qvals4$qvalues<0.05)
+#Interact
+qvals5=qvalue(efit.contrast$p.value[,5]) 
+qvals5$pi0
+Interact <- sum(qvals5$qvalues<0.05)
+
+qval_sig <- cbind(KOvsC,QuadKOvsC,SolKOvsC,QuadCvsSolC,Interact)
+barplot(qval_sig, main = "Significant q-values")
+
+```
+
+Gene Filtering, Venn Diagrams, and Correlation
+```{r}
+library(data.table)
+AllP = as.data.frame(efit.contrast$p.value)
+setDT(AllP, keep.rownames = "PROBEID")[]
+AllP$PROBEID <- as.integer(AllP$PROBEID)
+AllP <- semi_join(AllP, IDs, by="PROBEID")
+plot(hexplom(log10(AllP[,c("KOvsC", "QuadKOvsC", "SolKOvsC","QuadCvsSolC","Interact")])))
+(AllP_cor <- cor(log10(AllP[,c("KOvsC", "QuadKOvsC", "SolKOvsC","QuadCvsSolC","Interact")])))
+AllP_vennKvC <- AllP[,2:4]
+AllP_vennQvS <- AllP[,3:5]
+vennDiagram(vennCounts(AllP_vennKvC<=0.05), counts.col = c("red"), lwd = .7)
+vennDiagram(vennCounts(AllP_vennQvS<=0.05), counts.col = c("red"), lwd = .7)
+AllP_vennQvS_therapeutic_targets <- filter(AllP, QuadKOvsC<=0.05, SolKOvsC<=0.05, QuadCvsSolC>0.05)
+```
+Gene Filtering for Gene Ontology 
+```{r}
+library(data.table)
+KOvsC <- as.data.frame((qvals1$qvalues[qvals1$qvalues<0.05]))
+setDT(KOvsC, keep.rownames = "PROBEID")[]
+names(KOvsC)[2] <- "qValue"
+KOvsC$PROBEID <- as.integer(KOvsC$PROBEID)
+KOvsC_Gene <- semi_join(KOvsC, IDs, by="PROBEID")
+KOvsC_Gene <- left_join(KOvsC_Gene, IDs, by="PROBEID")
+KOvsC_Gene = KOvsC_Gene[(order(KOvsC_Gene[,2])),]
+KOvsC_top <- KOvsC_Gene[1:1000,]
+
+QuadKOvsC <- as.data.frame((qvals2$qvalues[qvals2$qvalues<0.05]))
+setDT(QuadKOvsC, keep.rownames = "PROBEID")[]
+names(QuadKOvsC)[2] <- "qValue"
+QuadKOvsC$PROBEID <- as.integer(QuadKOvsC$PROBEID)
+QuadKOvsC_Gene <- semi_join(QuadKOvsC, IDs, by="PROBEID")
+QuadKOvsC_Gene <- left_join(QuadKOvsC_Gene, IDs, by="PROBEID")
+QuadKOvsC_Gene = QuadKOvsC_Gene[(order(QuadKOvsC_Gene[,2])),]
+QuadKOvsC_top <- QuadKOvsC_Gene[1:1000,]
+
+SolKOvsC <- as.data.frame((qvals3$qvalues[qvals3$qvalues<0.05]))
+setDT(SolKOvsC, keep.rownames = "PROBEID")[]
+names(SolKOvsC)[2] <- "qValue"
+SolKOvsC$PROBEID <- as.integer(SolKOvsC$PROBEID)
+SolKOvsC_Gene <- semi_join(SolKOvsC, IDs, by="PROBEID")
+SolKOvsC_Gene <- left_join(SolKOvsC_Gene, IDs, by="PROBEID")
+SolKOvsC_Gene = SolKOvsC_Gene[(order(SolKOvsC_Gene[,2])),]
+SolKOvsC_top <- SolKOvsC_Gene[1:1000,]
+
+QuadCvsSolC <- as.data.frame((qvals4$qvalues[qvals4$qvalues<0.05]))
+setDT(QuadCvsSolC, keep.rownames = "PROBEID")[]
+names(QuadCvsSolC)[2] <- "qValue"
+QuadCvsSolC$PROBEID <- as.integer(QuadCvsSolC$PROBEID)
+QuadCvsSolC_Gene <- semi_join(QuadCvsSolC, IDs, by="PROBEID")
+QuadCvsSolC_Gene <- left_join(QuadCvsSolC_Gene, IDs, by="PROBEID")
+QuadCvsSolC_Gene = QuadCvsSolC_Gene[(order(QuadCvsSolC_Gene[,2])),]
+QuadCvsSolC_top <- QuadCvsSolC_Gene[1:1000,]
+
+Interact <- as.data.frame((qvals5$qvalues[qvals5$qvalues<0.05]))
+setDT(Interact, keep.rownames = "PROBEID")[]
+names(Interact)[2] <- "qValue"
+Interact$PROBEID <- as.integer(Interact$PROBEID)
+Interact_Gene <- semi_join(Interact, IDs, by="PROBEID")
+Interact_Gene <- left_join(Interact_Gene, IDs, by="PROBEID")
+Interact_Gene = Interact_Gene[(order(Interact_Gene[,2])),]
+Interact_top <- Interact_Gene[1:1000,]
+
+```
+Molecular Function GO
+```{r}
+library(goSTAG) 
+go_terms <- loadGOTerms(use_archived = TRUE, species = "mouse", domain = "MF")
+DEG_List <- list(KOvsC = c(KOvsC_top$Gene_Symbol),QuadKOvsC = c(QuadKOvsC_top$Gene_Symbol),SolKOvsC = c(SolKOvsC_top$Gene_Symbol),QuadCvsSolC = c(QuadCvsSolC_top$Gene_Symbol),Interact = c(Interact_top$Gene_Symbol))
+enrichment_matrix_MF <- performGOEnrichment( DEG_List, go_terms, significance_threshold = 0.3, p.adjust_method = "BH")
+hclust_results_MF <- performHierarchicalClustering( enrichment_matrix_MF, distance_method = "euclidean", clustering_method = "complete" )
+clusters_MF <- groupClusters( hclust_results_MF, distance_threshold = 1)
+cluster_labels_MF <- annotateClusters( clusters_MF )
+png( "DEG_MF_heatmap_NB.png", width = 1600, height = 1200 )
+plotHeatmap( enrichment_matrix_MF, hclust_results_MF, clusters_MF, cluster_labels_MF, dendrogram_lwd = 2, header_lwd = 2, cluster_label_cex = 1.5, sample_label_cex = 2, min_num_terms = 13)
+dev.off()
+```
+Biological Process GO
+```{r}
+go_terms <- loadGOTerms(use_archived = TRUE, species = "mouse", domain = "BP")
+enrichment_matrix_BP <- performGOEnrichment( DEG_List, go_terms, significance_threshold = 0.3, p.adjust_method = "BH")
+hclust_results_BP <- performHierarchicalClustering( enrichment_matrix_BP, distance_method = "euclidean", clustering_method = "complete" )
+clusters_BP <- groupClusters( hclust_results_BP, distance_threshold = 1)
+cluster_labels_BP <- annotateClusters( clusters_BP )
+png( "DEG_BP_heatmap_NB.png", width = 1600, height = 1200 )
+plotHeatmap( enrichment_matrix_BP, hclust_results_BP, clusters_BP, cluster_labels_BP, dendrogram_lwd = 2, header_lwd = 2, cluster_label_cex = 1.2, sample_label_cex = 2, min_num_terms = 25 )
+dev.off()
+```
+Cellular Component GO
+```{r}
+go_terms <- loadGOTerms(use_archived = TRUE, species = "mouse", domain = "CC")
+enrichment_matrix_CC <- performGOEnrichment( DEG_List, go_terms, significance_threshold = 0.3, p.adjust_method = "BH")
+hclust_results_CC <- performHierarchicalClustering( enrichment_matrix_CC, distance_method = "euclidean", clustering_method = "complete" )
+clusters_CC <- groupClusters( hclust_results_CC, distance_threshold = 1)
+cluster_labels_CC <- annotateClusters( clusters_CC )
+png( "DEG_CC_heatmap_NB.png", width = 1600, height = 1200 )
+plotHeatmap( enrichment_matrix_CC, hclust_results_CC, clusters_CC, cluster_labels_CC, dendrogram_lwd = 2, header_lwd = 2, cluster_label_cex = 1.2, sample_label_cex = 2, min_num_terms = 7 )
+dev.off()
+```
+
+PCA of samples
+```{r}
+library(devtools)
+install_github("vqv/ggbiplot")
+library(ggbiplot)
+exprs.rma <- as.data.frame(exprs(musc.rma))
+setDT(exprs.rma, keep.rownames = "PROBEID")[]
+exprs.rma$PROBEID <- as.integer(exprs.rma$PROBEID)
+exprs.rma.gene <- semi_join(exprs.rma, KOvsC_top, by="PROBEID")
+exprs.rma.gene <- left_join(exprs.rma.gene, KOvsC_top, by="PROBEID")
+exprs.rma.gene = exprs.rma.gene[(order(exprs.rma.gene[,26])),]
+exprs.rma.gene <- exprs.rma.gene[,2:25]
+exprs.rma.gene <- t(exprs.rma.gene)
+exprs.rma.pca <- prcomp(exprs.rma.gene, center = TRUE,scale. = TRUE)
+summary(exprs.rma.pca)
+ggbiplot(exprs.rma.pca, labels = rownames(exprs.rma.gene), var.axes = FALSE, groups = )
+```
