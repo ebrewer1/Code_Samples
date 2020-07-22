@@ -21,8 +21,7 @@ exon-NM_132187.3-1	8.33487276991195
 exon-NM_141629.3-2	8.06567747978057
 exon-NM_001260053.1-2	8.03916588639734
 
-I then tried to perform a GSEA on the DEGs that I found, but I had a very hard time with converting these RefSeq IDs into genes or finding anything else about these IDs. I got the GFF file from the NCBI,
-so if I had more time I would have tried a different annotation file but the assignment was late anyway. The authors found that "glycolytic and pentose phosphate pathway genes are induced by dERR",
+The authors found that "glycolytic and pentose phosphate pathway genes are induced by dERR",
 so at least there is some knowledge about the gene- and protein-level changes when dERR is knocked out. They also report that the flies have decreased locomotion, are susceptible to starvartion, and
 and seem to be putting all of their glucose in the bloodstream vs storing it via triglycerides. 
 
